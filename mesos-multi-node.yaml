@@ -1,0 +1,95 @@
+heat_template_version: 2016-04-08
+
+description: >
+  Heat Template to create a Mesos DC/OS cluster
+
+parameters:
+  num_instances:
+    type: number
+    description: The number of Agent nodes to create. Default is 2.
+    default: 2
+  bootstrap_flavor:
+    type: string
+    description: The flavor to use to boot the VM
+    default: mesos.bootstrap
+  master_flavor:
+    type: string
+    description: The flavor to use to boot the VM
+    default: mesos.master
+  agent_flavor:
+    type: string
+    description: The flavor to use to boot the VM
+    default: mesos.agent
+  image:
+    type: string
+    description: The image to use, defaults to CentOS
+    default: CentOS7.2-1608
+  ssh_key:
+    type: string
+    default: balduf-hlaptop
+  sec_groups:
+    type: string
+    default: default
+  network:
+    type: string
+    default: admin_net
+  bootstrap_root_size:
+    type: number
+    default: 60
+  master_root_size:
+    type: number
+    default: 120
+  agent_root_size:
+    type: number
+    default: 60
+
+resources:
+  DCOS_bootstrap_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 1
+      resource_def:
+          type: mesos-node.yaml
+          properties:
+            flavor: { get_param: bootstrap_flavor }
+            image: { get_param: image }
+            ssh_key: { get_param: ssh_key }
+            sec_groups: { get_param: sec_groups }
+            network: { get_param: network }
+            root_size: { get_param: bootstrap_root_size }
+
+  DCOS_master_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: 1
+      resource_def:
+          type: mesos-node.yaml
+          properties:
+            flavor: { get_param: master_flavor }
+            image: { get_param: image }
+            ssh_key: { get_param: ssh_key }
+            sec_groups: { get_param: sec_groups }
+            network: { get_param: network }
+            root_size: { get_param: master_root_size }
+
+  DCOS_agent_group:
+    type: OS::Heat::ResourceGroup
+    properties:
+      count: { get_param: num_instances }
+      resource_def:
+          type: mesos-node.yaml
+          properties:
+            flavor: { get_param: agent_flavor }
+            image: { get_param: image }
+            ssh_key: { get_param: ssh_key }
+            sec_groups: { get_param: sec_groups }
+            network: { get_param: network }
+            root_size: { get_param: agent_root_size }
+
+outputs:
+ bootstrap_ip:
+    value: { get_attr: [ DCOS_bootstrap_group, public_ip] }
+ master_ip:
+    value: { get_attr: [ DCOS_master_group, public_ip] }
+ agent_ips:
+    value: { get_attr: [ DCOS_agent_group, public_ip] }

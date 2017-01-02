@@ -1,0 +1,193 @@
+heat_template_version: 2016-04-08
+
+description: >
+  Heat Template to start a CentOS VM, install docker, mesos binaries
+  and the DVPs and put it on the external network
+
+parameters:
+  flavor:
+    type: string
+  image:
+    type: string
+  ssh_key:
+    type: string
+  sec_groups:
+    type: string
+    default: default
+  network:
+    type: string
+  public_network:
+    type: string
+    default: public
+  root_type:
+    type: string
+    default: solidfire
+  root_size:
+    type: number
+
+resources:
+  root_vol:
+    type: OS::Cinder::Volume
+    properties:
+      volume_type: { get_param: root_type }
+      image: { get_param: image }
+      size: { get_param: root_size }
+
+  wait_cloud_init_done:
+    type: OS::Heat::WaitCondition
+    properties:
+      handle: {get_resource: wait_handle}
+      count: 1
+      timeout: 600
+
+  wait_handle:
+    type: OS::Heat::WaitConditionHandle
+
+  enable_notify_reboot:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: |
+        #!/bin/bash
+        systemctl enable heat_notify_done.service
+        sleep 30
+        reboot
+
+  notify_done_service:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        merge_how: 'dict(recurse_array,no_replace)+list(append)'
+        write_files:
+          - path: "/var/tmp/heat-notify.sh"
+            permissions: "0755"
+            owner: "root"
+            content:
+              str_replace:
+                template: |
+                  #!/bin/bash
+                  MYIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/local-ipv4)
+                  wc_notify --data-binary '{"status": "SUCCESS", "reason": "done", "data": "'$MYIP'"}'
+                  echo "Sent Completion to Heat - $MYIP"
+                  systemctl disable heat_notify_done.service
+                params:
+                  wc_notify: { get_attr: [wait_handle, curl_cli] }
+          - path: "/etc/systemd/system/heat_notify_done.service"
+            permissions: "0644"
+            owner: "root"
+            content: |
+              [Install]
+              WantedBy=multi-user.target
+
+              [Unit]
+              Description=Notify Heat we're done
+              After=network.target
+
+              [Service]
+              Type=oneshot
+              ExecStart=-/var/tmp/heat-notify.sh
+
+  config_users:
+    type: OS::TripleO::Users
+
+  install_software:
+    type: OS::TripleO::SoftwareInstall
+
+  ndvp:
+    type: OS::TripleO::NdvpInstall
+
+  sfdvp:
+    type: OS::TripleO::SfdvpInstall
+
+  cinderdvp:
+    type: OS::TripleO::CinderdvpInstall
+
+  server_init:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+      - config: { get_resource: install_software }
+        type: multipart
+      - config: { get_resource: config_users }
+        type: multipart
+      - config: { get_resource: sfdvp }
+        type: multipart
+      - config: { get_resource: ndvp }
+        type: multipart
+      - config: { get_resource: cinderdvp }
+        type: multipart
+      - config: { get_resource: notify_done_service }
+      - config: { get_resource: enable_notify_reboot }
+
+  ping_ssh_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: ping_ssh_sg
+      description: Ping and SSH
+      rules:
+      - protocol: icmp
+      - protocol: tcp
+        port_range_min: 22
+        port_range_max: 22
+
+  mesos_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name: mesos_sg
+      description: Ports for Mesos
+      rules:
+      - protocol: tcp
+        port_range_min: 80
+        port_range_max: 80
+      - protocol: tcp
+        port_range_min: 443
+        port_range_max: 443
+      - protocol: tcp
+        port_range_min: 5050
+        port_range_max: 5050
+      - protocol: tcp
+        port_range_min: 8080
+        port_range_max: 8080
+      - protocol: tcp
+        port_range_min: 8181
+        port_range_max: 8181
+      - protocol: tcp
+        port_range_min: 2181
+        port_range_max: 2181
+
+  server:
+    type: OS::Nova::Server
+    properties:
+      block_device_mapping:
+        - device_name: vda
+          volume_id: { get_resource: root_vol }
+          delete_on_termination: false
+      flavor: { get_param: flavor }
+      key_name: { get_param: ssh_key }
+      security_groups:
+        - { get_param: sec_groups }
+        - { get_resource: ping_ssh_sg }
+        - { get_resource: mesos_sg }
+      networks:
+        - network: { get_param: network }
+      user_data_format: SOFTWARE_CONFIG
+      user_data: { get_resource: server_init }
+
+  floatingip:
+    type: OS::Nova::FloatingIP
+    properties:
+      pool: { get_param: public_network }
+
+  floatingipassoc:
+    type: OS::Nova::FloatingIPAssociation
+    properties:
+      floating_ip: { get_resource: floatingip }
+      server_id: { get_resource: server }
+
+outputs:
+  public_ip:
+    description: Server Floating IP address
+    value: { get_attr: [ floatingip, ip ] }
+  reported_ip:
+    description: The IP address reported by the server once its ready
+    value: { get_attr: [wait_cloud_init_done, data] }
