@@ -38,7 +38,7 @@ resources:
     properties:
       handle: {get_resource: wait_handle}
       count: 1
-      timeout: 600
+      timeout: 900
 
   wait_handle:
     type: OS::Heat::WaitConditionHandle
@@ -185,9 +185,15 @@ resources:
       server_id: { get_resource: server }
 
 outputs:
+  server:
+    description: Server ID
+    value: { get_resource: server }
   public_ip:
     description: Server Floating IP address
     value: { get_attr: [ floatingip, ip ] }
+  private_ip:
+    description: Server Private IP address
+    value: { get_attr: [server, networks, { get_param: network }, 0]}
   reported_ip:
     description: The IP address reported by the server once its ready
     value: { get_attr: [wait_cloud_init_done, data] }

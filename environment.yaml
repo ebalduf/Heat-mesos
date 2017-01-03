@@ -6,9 +6,9 @@ resource_registry:
   OS::TripleO::CinderdvpInstall: ./cinderdvp-init.yaml
 
 parameters:
-  flavor: mesos.bootstrap
+#  flavor: mesos.bootstrap
   image: centos7-software-config
   ssh_key: balduf-hlaptop
   network: admin_net
-  root_size: 40
+#  root_size: 40
 

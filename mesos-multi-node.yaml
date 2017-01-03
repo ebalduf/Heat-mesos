@@ -23,7 +23,7 @@ parameters:
   image:
     type: string
     description: The image to use, defaults to CentOS
-    default: CentOS7.2-1608
+    default: centos7-software-config
   ssh_key:
     type: string
     default: balduf-hlaptop
@@ -44,6 +44,102 @@ parameters:
     default: 60
 
 resources:
+  key_pair:
+    type: OS::Nova::KeyPair
+    properties:
+      name:
+        list_join:
+          - '-'
+          - - { get_param: 'OS::stack_name' }
+            - "keypair"
+      save_private_key: true
+
+  insert_ssh_key:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      inputs:
+      - name: private_key
+      - name: user
+      config: |
+        #!/usr/bin/bash
+        echo $private_key > /home/$user/.ssh/id_rsa.raw 
+        echo '-----BEGIN RSA PRIVATE KEY-----' > /home/$user/.ssh/id_rsa
+        sed 's/ /\n/g' /home/$user/.ssh/id_rsa.raw | sed -n 5,29p >> /home/$user/.ssh/id_rsa
+        echo '-----END RSA PRIVATE KEY-----' >> /home/$user/.ssh/id_rsa
+        chmod 600 /home/$user/.ssh/id_rsa /home/$user/.ssh/id_rsa.raw
+        chown $user.$user /home/$user/.ssh/id_rsa /home/$user/.ssh/id_rsa.raw
+
+  deploy_insert_ssh:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      config:
+        get_resource: insert_ssh_key
+      server:
+        { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
+      input_values:
+        private_key: { get_attr: [ key_pair, private_key ] }
+        user: "dcos"
+
+  install_dcos:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: script
+      inputs:
+      - name: user
+      - name: agents
+      - name: masters
+      - name: agents_public
+      - name: cluster_name
+      config: |
+        #!/usr/bin/bash
+        su -c 'mkdir -p /home/$user/genconf' $user
+        su -c 'cp /var/tmp/ip-detect.sh /home/$user/genconf/ip-detect' $user
+        su -c 'cp /home/$user/.ssh/id_rsa /home/$user/genconf/ssh_key' $user
+        cat << EOF > /home/$user/genconf/config.yaml
+        ---
+        #agent_list: $agents
+        exhibitor_storage_backend: static
+        ip_detect_path: genconf/ip-detect
+        master_discovery: static
+        master_list: $masters
+        bootstrap_url: file:///opt/dcos_install_tmp
+        cluster_name: $cluster_name
+        process_timeout: 10000
+        public_agent_list: $agents_public
+        resolvers:
+        - 172.27.1.251
+        - 8.8.8.8
+        - 8.8.4.4
+        ssh_key_path: genconf/ssh_key
+        ssh_port: 22
+        ssh_user: $user
+        telemetry_enabled: false
+        EOF
+        cd /home/$user
+        # remove the unicode designator
+        sed -i 's#u'\''#'\''#g' genconf/config.yaml
+        su -c 'curl -O https://downloads.dcos.io/dcos/stable/dcos_generate_config.sh' $user
+        bash dcos_generate_config.sh --genconf
+        bash dcos_generate_config.sh --install-prereqs
+        bash dcos_generate_config.sh --preflight
+        bash dcos_generate_config.sh --deploy
+        bash dcos_generate_config.sh --postflight
+
+  deploy_dcos:
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      config:
+        get_resource: install_dcos
+      server:
+        { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
+      input_values:
+        user: "dcos"
+        agents: { get_attr: [ DCOS_agent_group, private_ip ] }
+        masters: { get_attr: [ DCOS_master_group, private_ip ] }
+        agents_public: { get_attr: [ DCOS_agent_group, public_ip ] }
+        cluster-name: { get_param: 'OS::stack_name' }
+
   DCOS_bootstrap_group:
     type: OS::Heat::ResourceGroup
     properties:
@@ -53,7 +149,12 @@ resources:
           properties:
             flavor: { get_param: bootstrap_flavor }
             image: { get_param: image }
-            ssh_key: { get_param: ssh_key }
+            #ssh_key: { get_param: ssh_key }
+            ssh_key:
+              list_join:
+                - '-'
+                - - { get_param: 'OS::stack_name' }
+                  - "keypair"
             sec_groups: { get_param: sec_groups }
             network: { get_param: network }
             root_size: { get_param: bootstrap_root_size }
@@ -67,7 +168,12 @@ resources:
           properties:
             flavor: { get_param: master_flavor }
             image: { get_param: image }
-            ssh_key: { get_param: ssh_key }
+            #ssh_key: { get_attr: [ deploy_gen_ssh, public_key ] }
+            ssh_key:
+              list_join:
+                - '-'
+                - - { get_param: 'OS::stack_name' }
+                  - "keypair"
             sec_groups: { get_param: sec_groups }
             network: { get_param: network }
             root_size: { get_param: master_root_size }
@@ -81,7 +187,12 @@ resources:
           properties:
             flavor: { get_param: agent_flavor }
             image: { get_param: image }
-            ssh_key: { get_param: ssh_key }
+            #ssh_key: { get_attr: [ deploy_gen_ssh, public_key ] }
+            ssh_key:
+              list_join:
+                - '-'
+                - - { get_param: 'OS::stack_name' }
+                  - "keypair"
             sec_groups: { get_param: sec_groups }
             network: { get_param: network }
             root_size: { get_param: agent_root_size }
@@ -93,3 +204,5 @@ outputs:
     value: { get_attr: [ DCOS_master_group, public_ip] }
  agent_ips:
     value: { get_attr: [ DCOS_agent_group, public_ip] }
+ public_key:
+    value: { get_attr: [ key_pair, public_key ] }
