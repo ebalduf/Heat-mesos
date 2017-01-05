@@ -135,75 +135,42 @@ resources:
         { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
       input_values:
         user: "dcos"
-        masters: { get_attr: [ DCOS_master_group, private_ip ] }
-        agents: { get_attr: [ DCOS_agent_group, private_ip ] }
+        masters: { get_attr: [ DCOS_master_group, public_ip ] }
+        agents: { get_attr: [ DCOS_agent_group, public_ip ] }
         cluster_name: { get_param: 'OS::stack_name' }
 
-  install_mesos_dns:
+  # I run this from the bootstrap node because the list resturned from a Heat
+  # resource group needs ugly massaging to get it into the format for a 
+  # SoftwareDeploymentGroup.  This is fixed in Newton, but this is to run on 
+  # Mitaka for now.
+  fix_agent_hostname:
     type: OS::Heat::SoftwareConfig
     properties:
       group: script
       inputs:
-      - name: user
-      - name: themasters
       - name: theagents
       config: |
         #!/usr/bin/bash
-        BINARY=/usr/local/bin/mesos-dns
-        LIBRARY=/usr/local/lib/mesos-dns/
-        cd /tmp
-        wget -q https://github.com/mesosphere/mesos-dns/releases/download/v0.6.0/mesos-dns-v0.6.0-linux-amd64
-        mv mesos-dns-v0.6.0-linux-amd64 $BINARY
-        chmod 755 $BINARY
-        mkdir $LIBRARY
-        cat << EOF > $LIBRARY/masters.list
-          $themasters
-        EOF
-        cat << EOF > $LIBRARY/agents.list
+        cat << EOF > /tmp/agents.list
           $theagents
         EOF
-        cat << EOF > $LIBRARY/config.json
-        {
-          "refreshSeconds": 60,
-          "ttl": 60,
-          "domain": "mesos",
-          "port": 53,
-          "resolvers": ["172.27.1.251"],
-          "timeout": 5,
-          "httpon": true,
-          "dnson": true,
-          "httpport": 8123,
-          "externalon": true,
-          "listener": "0.0.0.0",
-          "SOAMname": "pm.solidfire.net",
-          "SOARname": "balduf.netapp.com",
-          "SOARefresh": 60,
-          "SOARetry":   600,
-          "SOAExpire":  86400,
-          "SOAMinttl": 60,
-          "IPSources": ["netinfo", "mesos", "host"]
-        EOF
-        sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' $LIBRARY/masters.list | awk 'BEGIN{printf("  \"zk\" : \"zk://")}{printf("%s:2181,",$1)}END{printf("/mesos\",\n")}'|sed 's|,/mesos|/mesos|g' >> $LIBRARY/config.json
-        sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' $LIBRARY/masters.list | awk 'BEGIN{printf("  \"masters\": [")}{printf("\"%s:5050\",",$1)}END{printf("],\n")}'|sed 's|",],|"],|g' >> $LIBRARY/config.json
-        echo '}' >> $LIBRARY/config.json
-        echo "-------- done. Now scp -----"
         for ag in `sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' $LIBRARY/agents.list`; do
-          echo "Host: " $ag
-          scp -o StrictHostKeyChecking=no -r $LIBRARY $ag:$LIBRARY
-          scp -o StrictHostKeyChecking=no -r $BINARY $ag:$BINARY
+          echo "Fixing Mesos Hostname: " $ag
+          ssh -o StrictHostKeyChecking=no $ag 'PUBIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4); \
+                                               echo "MESOS_HOSTNAME=$PUBIP" >> /opt/mesosphere/etc/mesos-slave-common \
+                                               reboot'
+          sleep 30
         done
 
-  deploy_mesos_dns:
+  deploy_fix_hostname:
     type: OS::Heat::SoftwareDeployment
     properties:
       config:
-        get_resource: install_mesos_dns
+        get_resource: fix_agent_hostname
       server:
         { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
       input_values:
-        user: "dcos"
         theagents: { get_attr: [ DCOS_agent_group, private_ip ] }
-        themasters: { get_attr: [ DCOS_master_group, private_ip ] }
 
   DCOS_bootstrap_group:
     type: OS::Heat::ResourceGroup
