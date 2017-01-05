@@ -137,23 +137,11 @@ resources:
       description: Ports for Mesos
       rules:
       - protocol: tcp
-        port_range_min: 80
-        port_range_max: 80
-      - protocol: tcp
-        port_range_min: 443
-        port_range_max: 443
-      - protocol: tcp
-        port_range_min: 5050
-        port_range_max: 5050
-      - protocol: tcp
-        port_range_min: 8080
-        port_range_max: 8080
-      - protocol: tcp
-        port_range_min: 8181
-        port_range_max: 8181
-      - protocol: tcp
-        port_range_min: 2181
-        port_range_max: 2181
+        port_range_min: 1
+        port_range_max: 65535
+      - protocol: udp
+        port_range_min: 1
+        port_range_max: 65535
 
   server:
     type: OS::Nova::Server
@@ -166,7 +154,7 @@ resources:
       key_name: { get_param: ssh_key }
       security_groups:
         - { get_param: sec_groups }
-        - { get_resource: ping_ssh_sg }
+        #- { get_resource: ping_ssh_sg }
         - { get_resource: mesos_sg }
       networks:
         - network: { get_param: network }

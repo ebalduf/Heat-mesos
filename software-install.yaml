@@ -49,6 +49,23 @@ resources:
           - ntp-doc
         package_upgrade: true
         write_files:
+          - path: "/usr/local/bin/balduf_format"
+            owner: "root"
+            permissions: "0755"
+            content: |
+              #!/bin/python
+              import json
+              from pprint import pprint
+              import argparse
+
+              parser = argparse.ArgumentParser(description='read large json and dump one field.')
+              parser.add_argument('file', type=argparse.FileType('r') )
+              parser.add_argument('field')
+              args = parser.parse_args()
+              with open(args.file.name) as data_file:
+                  data = json.load(data_file)
+
+              print unicode(data[args.field])
           - path: "/etc/modules-load.d/overlay.conf"
             permissions: "0644"
             owner: "root"
@@ -61,12 +78,13 @@ resources:
               [Service]
               ExecStart=
               ExecStart=/usr/bin/docker daemon --storage-driver=overlay -H fd://
-          - path: "/var/tmp/ip-detect.sh"
+          - path: "/usr/local/bin/ip-detect.sh"
             permissions: "0755"
             owner: "root"
             content: |
               #!/bin/sh
               curl -fsSL http://169.254.169.254/latest/meta-data/local-ipv4
+              #curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4
 
   otherCommands:
     type: OS::Heat::SoftwareConfig
