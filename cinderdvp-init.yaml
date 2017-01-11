@@ -5,6 +5,14 @@ description: >
   TODO; a lot of parameterization of what is hard coded.
 
 parameters:
+  cinder_endpoint:
+    type: string
+  cinder_username:
+    type: string
+  cinder_password:
+    type: string
+  cinder_tenantID:
+    type: string
 
 resources:
   cinderdvpInstall:
@@ -23,15 +31,22 @@ resources:
           - path: "/tmp/cinder-docker.json"
             permissions: "0644"
             owner: "root"
-            content: |
-              {
-                "Endpoint": "http://172.27.31.11:5000/v2.0",
-                "Username": "mesos",
-                "Password": "solidfire",
-                "TenantID": "fa8d19d16d7d42b3814f0184b0fd5f69",
-                "DefaultVolSz": 1,
-                "HostUUID":
-              }
+            content:
+              str_replace:
+                template: |
+                   {
+                     "Endpoint": "c_endpoint",
+                     "Username": "c_username",
+                     "Password": "c_password",
+                     "TenantID": "c_tenantID",
+                     "DefaultVolSz": 1,
+                     "HostUUID":
+                   }
+                params:
+                 c_endpoint: { get_param: cinder_endpoint }
+                 c_username: { get_param: cinder_username }
+                 c_password: { get_param: cinder_password }
+                 c_tenantID: { get_param: cinder_tenantID }
 
   cinderdvpCommands:
     type: OS::Heat::SoftwareConfig

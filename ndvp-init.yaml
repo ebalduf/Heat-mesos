@@ -4,6 +4,12 @@ description: >
   This Template will install NetApp Docker Volume Plugin (NDVP) and configure
 
 parameters:
+ ndvp_endpoint:
+   type: string
+ ndvp_svip:
+   type: string
+ ndvp_account:
+   type: string
 
 resources:
   ndvpInstall:
@@ -22,44 +28,49 @@ resources:
           - path: "/etc/ndvp-solidfire-san.json"
             permissions: "0644"
             owner: "root"
-            content: |
-              {
-                 "version": 1,
-                 "storageDriverName": "solidfire-san",
-                 "debug": false,
-                 "Endpoint": "https://admin:solidfire@172.27.1.50/json-rpc/7.0",
-                 "SVIP": "172.27.25.50:3260",
-                 "TenantName": "MesosCluster",
-                 "DefaultVolSz": 1,
-                 "InitiatorIFace": "default",
-                 "Types": [
-                     {
-                         "Type": "Bronze",
-                         "Qos": {
-                             "minIOPS": 100,
-                             "maxIOPS": 200,
-                             "burstIOPS": 400
+            content:
+              str_replace:
+                template: |
+                  {
+                     "version": 1,
+                     "storageDriverName": "solidfire-san",
+                     "debug": false,
+                     "Endpoint": "n_endpoint",
+                     "SVIP": "n_svip",
+                     "TenantName": "n_account",
+                     "DefaultVolSz": 1,
+                     "InitiatorIFace": "default",
+                     "Types": [
+                         {
+                             "Type": "Bronze",
+                             "Qos": {
+                                 "minIOPS": 100,
+                                 "maxIOPS": 200,
+                                 "burstIOPS": 400
+                             }
+                         },
+                         {
+                             "Type": "Silver",
+                             "Qos": {
+                                 "minIOPS": 1000,
+                                 "maxIOPS": 2000,
+                                 "burstIOPS": 2500
+                             }
+                         },
+                         {
+                             "Type": "Gold",
+                             "Qos": {
+                                 "minIOPS": 3000,
+                                 "maxIOPS": 4000,
+                                 "burstIOPS": 4500
+                             }
                          }
-                     },
-                     {
-                         "Type": "Silver",
-                         "Qos": {
-                             "minIOPS": 1000,
-                             "maxIOPS": 2000,
-                             "burstIOPS": 2500
-                         }
-                     },
-                     {
-                         "Type": "Gold",
-                         "Qos": {
-                             "minIOPS": 3000,
-                             "maxIOPS": 4000,
-                             "burstIOPS": 4500
-                         }
-                     }
-                 ]
-              }
-        
+                     ]
+                  }
+                params:
+                  n_endpoint: { get_param: ndvp_endpoint }
+                  n_svip: { get_param: ndvp_svip }
+                  n_account: { get_param: ndvp_account }
           - path: "/etc/systemd/system/ndvp.service"
             permissions: "0644"
             owner: "root"

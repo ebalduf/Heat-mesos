@@ -4,6 +4,12 @@ description: >
   This Template will install SolidFire Docker Volume Plugin (sfdvp) and configure
 
 parameters:
+ sf_endpoint:
+   type: string
+ sf_svip:
+   type: string
+ sf_account:
+   type: string
 
 resources:
   sfdvpInstall:
@@ -22,20 +28,26 @@ resources:
           - path: "/tmp/solidfire.json"
             permissions: "0644"
             owner: "root"
-            content: |
-              {
-                "Endpoint": "https://admin:solidfire@172.27.1.50/json-rpc/7.0",
-                "SVIP": "172.27.25.50:3260",
-                "TenantName": "mesos",
-                "DefaultVolSz": 1,
-                "InitiatorIFace": "default",
-                "MountPoint": "/var/lib/solidfire/mount",
-                "Types": [
-                   {"Type": "Bronze", "Qos": {"minIOPS": 101, "maxIOPS": 202, "burstIOPS": 404}},
-                   {"Type": "Silver", "Qos": {"minIOPS": 1001, "maxIOPS": 1501, "burstIOPS": 2001}},
-                   {"Type": "Gold", "Qos": {"minIOPS": 3001, "maxIOPS": 5001, "burstIOPS": 10001}}
-                ]
-              }
+            content: 
+              str_replace: 
+                template: |
+                  {
+                    "Endpoint": "s_endpoint",
+                    "SVIP": "s_svip",
+                    "TenantName": "s_account",
+                    "DefaultVolSz": 1,
+                    "InitiatorIFace": "default",
+                    "MountPoint": "/var/lib/solidfire/mount",
+                    "Types": [
+                       {"Type": "Bronze", "Qos": {"minIOPS": 101, "maxIOPS": 202, "burstIOPS": 404}},
+                       {"Type": "Silver", "Qos": {"minIOPS": 1001, "maxIOPS": 1501, "burstIOPS": 2001}},
+                       {"Type": "Gold", "Qos": {"minIOPS": 3001, "maxIOPS": 5001, "burstIOPS": 10001}}
+                    ]
+                  }
+                params:
+                  s_endpoint: { get_param: sf_endpoint }
+                  s_svip: { get_param: sf_svip }
+                  s_account: { get_param: sf_account }
           - path: "/etc/systemd/system/sfdvp.service"
             permissions: "0644"
             owner: "root"

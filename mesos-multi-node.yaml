@@ -4,55 +4,41 @@ description: >
   Heat Template to create a Mesos DC/OS cluster
 
 parameters:
-  num_instances:
+  num_masters:
+    type: number
+    description: The number of Master nodes to create. Default is 1.
+  num_agents:
     type: number
     description: The number of Agent nodes to create. Default is 2.
-    default: 2
   bootstrap_flavor:
     type: string
     description: The flavor to use to boot the VM
-    default: mesos.bootstrap
   master_flavor:
     type: string
     description: The flavor to use to boot the VM
-    default: mesos.master
   agent_flavor:
     type: string
     description: The flavor to use to boot the VM
-    default: mesos.agent
   image:
     type: string
     description: The image to use, defaults to CentOS
-    default: centos7-software-config
-  ssh_key:
-    type: string
-    default: balduf-hlaptop
-  sec_groups:
-    type: string
-    default: default
   network:
     type: string
-    default: admin_net
   bootstrap_root_size:
     type: number
-    default: 60
   master_root_size:
     type: number
-    default: 120
   agent_root_size:
     type: number
-    default: 60
+  default_username:
+    type: string
+    default: dcos
 
 resources:
   key_pair:
-    type: OS::Nova::KeyPair
+    type: LIB::Dcos::Keypair
     properties:
-      name:
-        list_join:
-          - '-'
-          - - { get_param: 'OS::stack_name' }
-            - "keypair"
-      save_private_key: true
+      prefix: { get_param: default_username }
 
   insert_ssh_key:
     type: OS::Heat::SoftwareConfig
@@ -60,19 +46,17 @@ resources:
       group: script
       inputs:
       - name: private_key
-      - name: user
       config: |
         #!/usr/bin/bash
-        echo $private_key > /home/$user/.ssh/id_rsa.raw 
-        echo '-----BEGIN RSA PRIVATE KEY-----' > /home/$user/.ssh/id_rsa
-        sed 's/ /\n/g' /home/$user/.ssh/id_rsa.raw | sed -n 5,29p >> /home/$user/.ssh/id_rsa
-        echo '-----END RSA PRIVATE KEY-----' >> /home/$user/.ssh/id_rsa
-        chmod 600 /home/$user/.ssh/id_rsa /home/$user/.ssh/id_rsa.raw
-        cp /home/$user/.ssh/id_rsa /root/.ssh
-        chown $user.$user /home/$user/.ssh/id_rsa /home/$user/.ssh/id_rsa.raw
+        echo $private_key > /root/.ssh/id_rsa.raw 
+        echo '-----BEGIN RSA PRIVATE KEY-----' > /root/.ssh/id_rsa
+        sed 's/ /\n/g' /root/.ssh/id_rsa.raw | sed -n 5,29p >> /root/.ssh/id_rsa
+        echo '-----END RSA PRIVATE KEY-----' >> /root/.ssh/id_rsa
+        chmod 600 /root/.ssh/id_rsa /root/.ssh/id_rsa.raw
 
   deploy_insert_ssh:
     type: OS::Heat::SoftwareDeployment
+    depends_on: DCOS_bootstrap_group
     properties:
       config:
         get_resource: insert_ssh_key
@@ -80,7 +64,6 @@ resources:
         { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
       input_values:
         private_key: { get_attr: [ key_pair, private_key ] }
-        user: "dcos"
 
   install_dcos:
     type: OS::Heat::SoftwareConfig
@@ -93,10 +76,10 @@ resources:
       - name: cluster_name
       config: |
         #!/usr/bin/bash
-        su -c 'mkdir -p /home/$user/genconf' $user
-        su -c 'cp /usr/local/bin/ip-detect.sh /home/$user/genconf/ip-detect' $user
-        su -c 'cp /home/$user/.ssh/id_rsa /home/$user/genconf/ssh_key' $user
-        cat << EOF > /home/$user/genconf/config.yaml
+        mkdir -p /root/genconf
+        cp /usr/local/bin/ip-detect.sh /root/genconf/ip-detect
+        cp /root/.ssh/id_rsa /root/genconf/ssh_key
+        cat << EOF > /root/genconf/config.yaml
         ---
         exhibitor_storage_backend: static
         ip_detect_path: genconf/ip-detect
@@ -116,10 +99,10 @@ resources:
         ssh_user: $user
         telemetry_enabled: false
         EOF
-        cd /home/$user
+        cd /root
         # remove the unicode designator
         sed -i 's#u'\''#'\''#g' genconf/config.yaml
-        su -c 'curl -O https://downloads.dcos.io/dcos/stable/dcos_generate_config.sh' $user
+        curl -O https://downloads.dcos.io/dcos/stable/dcos_generate_config.sh
         bash dcos_generate_config.sh --genconf
         bash dcos_generate_config.sh --install-prereqs
         bash dcos_generate_config.sh --preflight
@@ -128,13 +111,16 @@ resources:
 
   deploy_dcos:
     type: OS::Heat::SoftwareDeployment
+    depends_on: deploy_insert_ssh
+    depends_on: DCOS_master_group
+    depends_on: DCOS_agent_group
     properties:
       config:
         get_resource: install_dcos
       server:
         { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
       input_values:
-        user: "dcos"
+        user: { get_param: default_username }
         masters: { get_attr: [ DCOS_master_group, public_ip ] }
         agents: { get_attr: [ DCOS_agent_group, public_ip ] }
         cluster_name: { get_param: 'OS::stack_name' }
@@ -143,37 +129,95 @@ resources:
   # resource group needs ugly massaging to get it into the format for a 
   # SoftwareDeploymentGroup.  This is fixed in Newton, but this is to run on 
   # Mitaka for now.
-  fix_agent_hostname:
+  fix_mesos_hostname:
     type: OS::Heat::SoftwareConfig
     properties:
       group: script
       inputs:
       - name: theagents
+      - name: themasters
+      - name: user
       config: |
         #!/usr/bin/bash
         cat << EOF > /tmp/agents.list
           $theagents
         EOF
-        for ag in `sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' $LIBRARY/agents.list`; do
+        cat << EOF > /tmp/masters.list
+          $themasters
+        EOF
+        for ag in `sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' /tmp/masters.list`; do
           echo "Fixing Mesos Hostname: " $ag
-          ssh -o StrictHostKeyChecking=no $ag 'PUBIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4); \
-                                               echo "MESOS_HOSTNAME=$PUBIP" >> /opt/mesosphere/etc/mesos-slave-common \
-                                               reboot'
+          ssh -o StrictHostKeyChecking=no $user@$ag 'PUBIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4); \
+                                                     echo "MESOS_HOSTNAME=$PUBIP" | sudo tee -a /opt/mesosphere/etc/mesos-master; \
+                                                     sudo reboot'
+          sleep 30
+        done
+        for ag in `sed 's|\[||g;s|]||g;s|u'\''||g;s|'\''||g;s| ||g;s|,|\n|g' /tmp/agents.list`; do
+          echo "Fixing Mesos Hostname: " $ag
+          ssh -o StrictHostKeyChecking=no $user@$ag 'PUBIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/public-ipv4); \
+                                                     echo "MESOS_HOSTNAME=$PUBIP" | sudo tee -a /opt/mesosphere/etc/mesos-slave-common; \
+                                                     sudo reboot'
           sleep 30
         done
 
   deploy_fix_hostname:
     type: OS::Heat::SoftwareDeployment
+    depends_on: deploy_dcos
     properties:
       config:
-        get_resource: fix_agent_hostname
+        get_resource: fix_mesos_hostname
       server:
         { get_attr: [ DCOS_bootstrap_group, resource.0.server ] }
       input_values:
+        user: { get_param: default_username }
         theagents: { get_attr: [ DCOS_agent_group, private_ip ] }
+        themasters: { get_attr: [ DCOS_master_group, private_ip ] }
+
+  mesos_sg:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      name:
+        str_replace:
+          params:
+            __prefix__: "mesos_sg"
+            __id__: { get_param: "OS::stack_name" }
+          template: __prefix__-__id__
+      description: Ports for Mesos
+      rules:
+      - protocol: tcp
+        port_range_min: 1
+        port_range_max: 65535
+      - protocol: udp
+        port_range_min: 1
+        port_range_max: 65535
+# I can't get this to work
+#      - remote_mode: "remote_group_id"
+#      - protocol: icmp
+#      - protocol: tcp
+#        port_range_min: 22
+#        port_range_max: 22
+#      - protocol: tcp
+#        port_range_min: 80
+#        port_range_max: 80
+#      - protocol: tcp
+#        port_range_min: 443
+#        port_range_max: 443
+#      - protocol: tcp
+#        port_range_min: 2181
+#        port_range_max: 2181
+#      - protocol: tcp
+#        port_range_min: 5050
+#        port_range_max: 5051
+#      - protocol: tcp
+#        port_range_min: 8080
+#        port_range_max: 8080
+#      - protocol: tcp
+#        port_range_min: 8181
+#        port_range_max: 8181
 
   DCOS_bootstrap_group:
     type: OS::Heat::ResourceGroup
+    depends_on: mesos_sg
     properties:
       count: 1
       resource_def:
@@ -181,51 +225,56 @@ resources:
           properties:
             flavor: { get_param: bootstrap_flavor }
             image: { get_param: image }
-            #ssh_key: { get_param: ssh_key }
-            ssh_key:
-              list_join:
-                - '-'
-                - - { get_param: 'OS::stack_name' }
-                  - "keypair"
-            sec_groups: { get_param: sec_groups }
+            ssh_key: { get_attr: [ key_pair, name ] }
+            sec_groups:
+            - "default"
+            - str_replace:
+                 params:
+                   __prefix__: "mesos_sg"           
+                   __id__: { get_param: "OS::stack_name" }
+                 template: __prefix__-__id__
             network: { get_param: network }
             root_size: { get_param: bootstrap_root_size }
 
   DCOS_master_group:
     type: OS::Heat::ResourceGroup
+    depends_on: mesos_sg
     properties:
-      count: 1
+      count: { get_param: num_masters }
       resource_def:
           type: mesos-node.yaml
           properties:
             flavor: { get_param: master_flavor }
             image: { get_param: image }
-            #ssh_key: { get_attr: [ deploy_gen_ssh, public_key ] }
-            ssh_key:
-              list_join:
-                - '-'
-                - - { get_param: 'OS::stack_name' }
-                  - "keypair"
-            sec_groups: { get_param: sec_groups }
+            ssh_key: { get_attr: [ key_pair, name ] }
+            sec_groups:
+            - "default"
+            - str_replace:
+                 params:
+                   __prefix__: "mesos_sg"           
+                   __id__: { get_param: "OS::stack_name" }
+                 template: __prefix__-__id__
             network: { get_param: network }
             root_size: { get_param: master_root_size }
 
   DCOS_agent_group:
     type: OS::Heat::ResourceGroup
+    depends_on: mesos_sg
     properties:
-      count: { get_param: num_instances }
+      count: { get_param: num_agents }
       resource_def:
           type: mesos-node.yaml
           properties:
             flavor: { get_param: agent_flavor }
             image: { get_param: image }
-            #ssh_key: { get_attr: [ deploy_gen_ssh, public_key ] }
-            ssh_key:
-              list_join:
-                - '-'
-                - - { get_param: 'OS::stack_name' }
-                  - "keypair"
-            sec_groups: { get_param: sec_groups }
+            ssh_key: { get_attr: [ key_pair, name ] }
+            sec_groups: 
+            - "default"
+            - str_replace:
+                 params:
+                   __prefix__: "mesos_sg"           
+                   __id__: { get_param: "OS::stack_name" }
+                 template: __prefix__-__id__
             network: { get_param: network }
             root_size: { get_param: agent_root_size }
 

@@ -12,8 +12,9 @@ parameters:
   ssh_key:
     type: string
   sec_groups:
-    type: string
-    default: default
+    type: comma_delimited_list
+    default:
+    - "default"
   network:
     type: string
   public_network:
@@ -43,64 +44,25 @@ resources:
   wait_handle:
     type: OS::Heat::WaitConditionHandle
 
-  enable_notify_reboot:
-    type: OS::Heat::SoftwareConfig
+  reboot_notify:
+    type: LIB::Dcos::RebootNotify
     properties:
-      group: ungrouped
-      config: |
-        #!/bin/bash
-        systemctl enable heat_notify_done.service
-        sleep 30
-        reboot
-
-  notify_done_service:
-    type: OS::Heat::CloudConfig
-    properties:
-      cloud_config:
-        merge_how: 'dict(recurse_array,no_replace)+list(append)'
-        write_files:
-          - path: "/var/tmp/heat-notify.sh"
-            permissions: "0755"
-            owner: "root"
-            content:
-              str_replace:
-                template: |
-                  #!/bin/bash
-                  MYIP=$(curl -fsSL http://169.254.169.254/latest/meta-data/local-ipv4)
-                  wc_notify --data-binary '{"status": "SUCCESS", "reason": "done", "data": "'$MYIP'"}'
-                  echo "Sent Completion to Heat - $MYIP"
-                  systemctl disable heat_notify_done.service
-                params:
-                  wc_notify: { get_attr: [wait_handle, curl_cli] }
-          - path: "/etc/systemd/system/heat_notify_done.service"
-            permissions: "0644"
-            owner: "root"
-            content: |
-              [Install]
-              WantedBy=multi-user.target
-
-              [Unit]
-              Description=Notify Heat we're done
-              After=network.target
-
-              [Service]
-              Type=oneshot
-              ExecStart=-/var/tmp/heat-notify.sh
+      wait_cli: { get_attr: [wait_handle, curl_cli] }
 
   config_users:
-    type: OS::TripleO::Users
+    type: LIB::Dcos::Users
 
   install_software:
-    type: OS::TripleO::SoftwareInstall
+    type: LIB::Dcos::SoftwareInstall
 
   ndvp:
-    type: OS::TripleO::NdvpInstall
+    type: LIB::Dcos::NdvpInstall
 
   sfdvp:
-    type: OS::TripleO::SfdvpInstall
+    type: LIB::Dcos::SfdvpInstall
 
   cinderdvp:
-    type: OS::TripleO::CinderdvpInstall
+    type: LIB::Dcos::CinderdvpInstall
 
   server_init:
     type: OS::Heat::MultipartMime
@@ -116,32 +78,8 @@ resources:
         type: multipart
       - config: { get_resource: cinderdvp }
         type: multipart
-      - config: { get_resource: notify_done_service }
-      - config: { get_resource: enable_notify_reboot }
-
-  ping_ssh_sg:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      name: ping_ssh_sg
-      description: Ping and SSH
-      rules:
-      - protocol: icmp
-      - protocol: tcp
-        port_range_min: 22
-        port_range_max: 22
-
-  mesos_sg:
-    type: OS::Neutron::SecurityGroup
-    properties:
-      name: mesos_sg
-      description: Ports for Mesos
-      rules:
-      - protocol: tcp
-        port_range_min: 1
-        port_range_max: 65535
-      - protocol: udp
-        port_range_min: 1
-        port_range_max: 65535
+      - config: { get_resource: reboot_notify }
+        type: multipart
 
   server:
     type: OS::Nova::Server
@@ -152,10 +90,7 @@ resources:
           delete_on_termination: false
       flavor: { get_param: flavor }
       key_name: { get_param: ssh_key }
-      security_groups:
-        - { get_param: sec_groups }
-        #- { get_resource: ping_ssh_sg }
-        - { get_resource: mesos_sg }
+      security_groups: { get_param: sec_groups }
       networks:
         - network: { get_param: network }
       user_data_format: SOFTWARE_CONFIG
